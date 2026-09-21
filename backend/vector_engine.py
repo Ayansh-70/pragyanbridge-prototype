@@ -132,18 +132,22 @@ def semantic_search(
 
         # 2. Calculate cosine similarity score against candidate project summary
         sim = compute_cosine_similarity(jd_vector, cand_emb)
-        # GitScore is the similarity scaled to 0-100, combined with AST integrity verification
-        ast_score = float(cand.get("ast_integrity_score", 95.0))
-        # GitScore incorporates semantic match quality (90%) and AST code integrity (10%)
+        # GitScore combines SBERT semantic similarity with AST structural analysis when available
+        ast_raw = cand.get("ast_structural_score") if cand.get("ast_structural_score") is not None else cand.get("ast_integrity_score")
         semantic_percentage = sim * 100.0
-        git_score = round((semantic_percentage * 0.90) + (ast_score * 0.10), 2)
+        if ast_raw is not None:
+            ast_score = float(ast_raw)
+            git_score = round((semantic_percentage * 0.90) + (ast_score * 0.10), 2)
+        else:
+            ast_score = None
+            git_score = round(semantic_percentage, 2)
         git_score = min(100.0, max(0.0, git_score))
 
         # 3. Assessment test score (0 - 100)
-        test_score = float(cand.get("test_score", 75.0))
+        test_score = float(cand.get("test_score") or 0.0)
 
         # 4. Academic CGPA normalized (CGPA on 10.0 scale -> 0 to 100)
-        cgpa = float(cand.get("cgpa", 7.5))
+        cgpa = float(cand.get("cgpa") or 0.0)
         cgpa_normalized = round(min(100.0, max(0.0, cgpa * 10.0)), 2)
 
         # 5. Dynamic composite final score
@@ -166,6 +170,7 @@ def semantic_search(
             "git_score": git_score,
             "semantic_similarity": round(sim, 4),
             "similarity_percentage": round(sim * 100.0, 1),
+            "ast_structural_score": ast_score,
             "ast_integrity_score": ast_score,
             "commit_count": cand.get("commit_count", 12),
             "project_title": cand.get("title", "Project"),
