@@ -14,9 +14,22 @@ logger = logging.getLogger("pragyanbridge.vector_engine")
 _model = None
 
 def get_sbert_model():
-    """Lazily loads and returns the SentenceTransformer model."""
+    """Lazily loads and returns the SentenceTransformer model or FallbackVectorizer in low-memory environments."""
     global _model
     if _model is None:
+        # Detect memory-constrained cloud environments (e.g. Render Free Tier with 512MB RAM)
+        # Render sets RENDER=true automatically.
+        is_cloud_render = (
+            os.environ.get("RENDER", "").lower() in ("1", "true")
+            or os.environ.get("USE_FALLBACK_VECTORIZER", "").lower() in ("1", "true", "yes")
+            or os.environ.get("LOW_MEMORY_MODE", "").lower() in ("1", "true", "yes")
+        )
+
+        if is_cloud_render:
+            logger.info("Cloud environment detected (RENDER=true / LOW_MEMORY_MODE). Using zero-RAM FallbackVectorizer.")
+            _model = FallbackVectorizer()
+            return _model
+
         try:
             from sentence_transformers import SentenceTransformer
             logger.info("Loading SentenceTransformer('all-MiniLM-L6-v2')...")
@@ -33,6 +46,8 @@ class FallbackVectorizer:
         self.dim = dim
 
     def encode(self, texts, convert_to_numpy: bool = True):
+        import hashlib
+        import re
         is_single = isinstance(texts, str)
         if is_single:
             texts = [texts]
@@ -40,13 +55,13 @@ class FallbackVectorizer:
         vectors = []
         for text in texts:
             vec = np.zeros(self.dim, dtype=np.float32)
-            words = text.lower().split()
+            words = re.findall(r'[a-zA-Z0-9_\+#\.]+', str(text).lower()) if text else []
             if not words:
                 vectors.append(vec)
                 continue
             for i, word in enumerate(words):
-                h = hash(word) % self.dim
-                vec[h] += 1.0 / (i + 1) ** 0.5
+                h = int(hashlib.md5(word.encode("utf-8")).hexdigest(), 16) % self.dim
+                vec[h] += 1.0 / (i + 1) ** 0.3
             norm = np.linalg.norm(vec)
             if norm > 0:
                 vec = vec / norm
@@ -120,8 +135,8 @@ def semantic_search(
             except Exception:
                 cand_emb = None
 
-        # If embedding wasn't pre-computed, compute from project summary or description
-        if cand_emb is None or len(cand_emb) == 0:
+        # If running in FallbackVectorizer mode or embedding wasn't pre-computed, encode from project summary
+        if isinstance(model, FallbackVectorizer) or cand_emb is None or len(cand_emb) == 0:
             summary_text = (
                 cand.get("code_summary")
                 or cand.get("description")
